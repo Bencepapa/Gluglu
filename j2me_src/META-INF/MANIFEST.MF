@@ -1,0 +1,9 @@
+Manifest-Version: 1.0
+MicroEdition-Configuration: CLDC-1.0
+MIDlet-Name: Gluglu
+MIDlet-Vendor: Bazalt
+MIDlet-1: Gluglu, , gluglu.Gluglu
+MIDlet-Version: 1.4
+MicroEdition-Profile: MIDP-1.0
+MIDlet-Description: Logical
+

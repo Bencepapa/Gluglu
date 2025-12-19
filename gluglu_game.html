@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gluglu - Puzzle Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #2c3e50;
+            touch-action: none;
+        }
+        
+        #gameContainer {
+            background: #5fafff;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        
+        canvas {
+            display: block;
+            border: 2px solid #34495e;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        
+        #controls {
+            margin-top: 15px;
+            text-align: center;
+            color: white;
+            font-size: 14px;
+        }
+        
+        #controls > div {
+            margin-bottom: 10px;
+        }
+        
+        .btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .btn:hover {
+            background: #2980b9;
+        }
+        
+        .btn:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="400" height="500"></canvas>
+        <div id="controls">
+            <div>
+                <strong>Controls:</strong> Mouse or arrow keys | Enter/Space | R to reset
+            </div>
+            <div>
+                <strong>Tip:</strong> Click on board to reshuffle remaining balls!
+            </div>
+            <button class="btn" onclick="game.resetLevel()">Reset Level</button>
+            <button class="btn" onclick="game.newGame()">New Game</button>
+        </div>
+    </div>
+
+    <script>
+        class Language {
+            constructor() {
+                this.lang = 'en';
+            }
+            
+            miniBall() { return 'B:'; }
+            miniLevel() { return 'L:'; }
+            miniScore() { return 'S:'; }
+            fullBall() { return 'Balls'; }
+            fullLevel() { return 'Level'; }
+            fullScore() { return 'Score'; }
+            Ball() { return 'B'; }
+            Level() { return 'L'; }
+            Score() { return 'S'; }
+            getLanguage() { return this.lang; }
+        }
+
+        class Score {
+            constructor() {
+                this.level = parseInt(localStorage.getItem('glugluLevel')) || 1;
+                this.reshuffles = 0;
+            }
+            
+            getLevel() {
+                return this.level;
+            }
+            
+            setLevel(level) {
+                this.level = level;
+                localStorage.setItem('glugluLevel', level);
+            }
+            
+            getReshuffles() {
+                return this.reshuffles;
+            }
+            
+            setReshuffles(count) {
+                this.reshuffles = count;
+            }
+            
+            useReshuffle() {
+                if (this.reshuffles > 0) {
+                    this.reshuffles--;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        class GlugluGame {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.lang = new Language();
+                this.scoreManager = new Score();
+                
+                this.meret = 9; // 9x9 grid
+                this.tabla = Array(this.meret).fill().map(() => Array(this.meret).fill(0));
+                this.talon = Array(4).fill().map(() => Array(this.meret).fill(0));
+                
+                this.maxGolyo = 4;
+                this.score = 0;
+                this.palya = this.scoreManager.getLevel();
+                
+                this.kurzor = 1; // 1=top, 2=bottom, 3=left, 4=right
+                this.kurzor2 = 4; // position along the edge
+                
+                this.r = 30; // ball radius
+                this.hezag = 5; // gap between balls
+                this.xEltolas = 50;
+                this.yEltolas = 80;
+                
+                this.colors = [
+                    '#000000', // 0 - not used
+                    '#20ff20', // 1 - green
+                    '#ff3020', // 2 - red
+                    '#ffff20', // 3 - yellow
+                    '#2030ff', // 4 - blue
+                    '#ff30ff', // 5 - magenta
+                    '#00ffff', // 6 - cyan
+                    '#7f7f7f', // 7 - gray
+                    '#ffffff'  // 8 - white
+                ];
+                
+                this.animating = false;
+                this.animationQueue = [];
+
+                this.pressedKeyOrMouse = false; // set it false before animation to handle animation interrupt
+                
+                this.setupEventListeners();
+                this.initGame();
+                this.draw();
+            }
+            
+            setupEventListeners() {
+                document.addEventListener('keydown', (e) => this.handleKeyPress(e));
+                
+                // Touch/click support
+                this.canvas.addEventListener('click', (e) => this.handleClick(e));
+            }
+            
+            handleClick(e) {
+                this.pressedKeyOrMouse = true;
+                if (this.animating) return;
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Check if clicking on talon areas
+                const gridSize = this.r + this.hezag;
+                
+                // Top talon
+                if (y < this.yEltolas && y > this.yEltolas - gridSize) {
+                    const col = Math.floor((x - this.xEltolas) / gridSize);
+                    if (col >= 0 && col < this.meret) {
+                        this.kurzor = 1;
+                        this.kurzor2 = col;
+                        this.pushBall();
+                    }
+                }
+                // Bottom talon
+                else if (y > this.yEltolas + this.meret * gridSize && y < this.yEltolas + this.meret * gridSize + gridSize) {
+                    const col = Math.floor((x - this.xEltolas) / gridSize);
+                    if (col >= 0 && col < this.meret) {
+                        this.kurzor = 2;
+                        this.kurzor2 = col;
+                        this.pushBall();
+                    }
+                }
+                // Left talon
+                else if (x < this.xEltolas && x > this.xEltolas - gridSize) {
+                    const row = Math.floor((y - this.yEltolas) / gridSize);
+                    if (row >= 0 && row < this.meret) {
+                        this.kurzor = 3;
+                        this.kurzor2 = row;
+                        this.pushBall();
+                    }
+                }
+                // Right talon
+                else if (x > this.xEltolas + this.meret * gridSize && x < this.xEltolas + this.meret * gridSize + gridSize) {
+                    const row = Math.floor((y - this.yEltolas) / gridSize);
+                    if (row >= 0 && row < this.meret) {
+                        this.kurzor = 4;
+                        this.kurzor2 = row;
+                        this.pushBall();
+                    }
+                }
+                // Center area - reshuffle
+                else if (x > this.xEltolas && x < this.xEltolas + this.meret * gridSize &&
+                         y > this.yEltolas && y < this.yEltolas + this.meret * gridSize) {
+                    this.kurzor = 0;
+                    this.reshuffle();
+                }
+                
+                this.draw();
+            }
+            
+            handleKeyPress(e) {
+                this.pressedKeyOrMouse = true;
+                if (this.animating) return;
+                
+                switch(e.key) {
+                    case 'ArrowLeft':
+                        if (this.kurzor === 1 || this.kurzor === 2) {
+                            this.kurzor2--;
+                            if (this.kurzor2 < 0) this.kurzor2 = this.meret - 1;
+                        } else if (this.kurzor === 4) {
+                            this.kurzor = 0;
+                            this.kurzor2 = 4;
+                        } else if (this.kurzor === 0) {
+                            this.kurzor = 3;
+                        } else {
+                            this.kurzor2--;
+                            if (this.kurzor2 < 0) this.kurzor2 = this.meret - 1;
+                        }
+                        break;
+                    case 'ArrowRight':
+                        if (this.kurzor === 1 || this.kurzor === 2) {
+                            this.kurzor2++;
+                            if (this.kurzor2 >= this.meret) this.kurzor2 = 0;
+                        } else if (this.kurzor === 3) {
+                            this.kurzor = 0;
+                            this.kurzor2 = 4;
+                        } else if (this.kurzor === 0) {
+                            this.kurzor = 4;
+                        } else {
+                            this.kurzor2++;
+                            if (this.kurzor2 >= this.meret) this.kurzor2 = 0;
+                        }
+                        break;
+                    case 'ArrowUp':
+                        if (this.kurzor === 3 || this.kurzor === 4) {
+                            this.kurzor2--;
+                            if (this.kurzor2 < 0) this.kurzor2 = this.meret - 1;
+                        } else if (this.kurzor === 2) {
+                            this.kurzor = 0;
+                            this.kurzor2 = 4;
+                        } else if (this.kurzor === 0) {
+                            this.kurzor = 1;
+                        } else {
+                            this.kurzor2--;
+                            if (this.kurzor2 < 0) this.kurzor2 = this.meret - 1;
+                        }
+                        break;
+                    case 'ArrowDown':
+                        if (this.kurzor === 3 || this.kurzor === 4) {
+                            this.kurzor2++;
+                            if (this.kurzor2 >= this.meret) this.kurzor2 = 0;
+                        } else if (this.kurzor === 1) {
+                            this.kurzor = 0;
+                            this.kurzor2 = 4;
+                        } else if (this.kurzor === 0) {
+                            this.kurzor = 2;
+                        } else {
+                            this.kurzor2++;
+                            if (this.kurzor2 >= this.meret) this.kurzor2 = 0;
+                        }
+                        break;
+                    case 'Enter':
+                    case ' ':
+                        if (this.kurzor === 0) {
+                            this.reshuffle();
+                        } else {
+                            this.pushBall();
+                        }
+                        break;
+                    case 'r':
+                    case 'R':
+                        this.resetLevel();
+                        break;
+                }
+                
+                this.draw();
+            }
+            
+            veletlen(num) {
+                return Math.floor(Math.random() * num) + 1;
+            }
+            
+            initGame() {
+                this.initTabla();
+                this.initTalon();
+                this.scoreManager.setReshuffles(this.maxGolyo);
+            }
+            
+            initTabla() {
+                // Clear board
+                for (let x = 0; x < this.meret; x++) {
+                    for (let y = 0; y < this.meret; y++) {
+                        this.tabla[x][y] = 0;
+                    }
+                }
+                
+                // Place random balls based on level
+                const max = this.palya;
+                for (let i = 0; i < max; i++) {
+                    const x = this.veletlen(this.meret) - 1;
+                    const y = this.veletlen(this.meret) - 1;
+                    this.tabla[x][y] = this.veletlen(this.maxGolyo);
+                }
+                
+                // Ensure at least one corner is empty
+                if (this.tabla[0][0] !== 0 && this.tabla[0][8] !== 0 && 
+                    this.tabla[8][0] !== 0 && this.tabla[8][8] !== 0) {
+                    const corner = this.veletlen(4);
+                    switch(corner) {
+                        case 1: this.tabla[0][0] = 0; break;
+                        case 2: this.tabla[0][8] = 0; break;
+                        case 3: this.tabla[8][0] = 0; break;
+                        case 4: this.tabla[8][8] = 0; break;
+                    }
+                }
+            }
+            
+            initTalon() {
+                for (let i = 0; i < 4; i++) {
+                    for (let y = 0; y < this.meret; y++) {
+                        this.talon[i][y] = this.veletlen(this.maxGolyo);
+                    }
+                }
+            }
+            
+            draw() {
+                const ctx = this.ctx;
+                
+                // Background
+                ctx.fillStyle = '#5fafff';
+                ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw grid
+                this.drawRacs();
+                
+                // Draw balls on board
+                this.drawGolyok();
+                
+                // Draw talon (edges)
+                this.drawAllTalon();
+                
+                // Draw cursor
+                this.drawKurzor();
+                
+                // Draw status
+                this.drawStatus();
+            }
+            
+            drawRacs() {
+                const ctx = this.ctx;
+                const gridSize = this.r + this.hezag;
+                
+                ctx.strokeStyle = '#3090bf';
+                ctx.lineWidth = 1;
+                
+                // Draw grid lines
+                for (let i = 0; i <= this.meret; i++) {
+                    // Vertical lines
+                    ctx.beginPath();
+                    ctx.moveTo(this.xEltolas + i * gridSize - this.hezag/2, this.yEltolas - this.hezag/2);
+                    ctx.lineTo(this.xEltolas + i * gridSize - this.hezag/2, this.yEltolas + this.meret * gridSize - this.hezag/2);
+                    ctx.stroke();
+                    
+                    // Horizontal lines
+                    ctx.beginPath();
+                    ctx.moveTo(this.xEltolas - this.hezag/2, this.yEltolas + i * gridSize - this.hezag/2);
+                    ctx.lineTo(this.xEltolas + this.meret * gridSize - this.hezag/2, this.yEltolas + i * gridSize - this.hezag/2);
+                    ctx.stroke();
+                }
+                
+                // Outer border
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(this.xEltolas - this.hezag/2, this.yEltolas - this.hezag/2, 
+                             this.meret * gridSize, this.meret * gridSize);
+            }
+            
+            drawGolyok() {
+                for (let x = 0; x < this.meret; x++) {
+                    for (let y = 0; y < this.meret; y++) {
+                        if (this.tabla[x][y] > 0 && this.tabla[x][y] < 9) {
+                            this.drawBall(x, y, this.tabla[x][y]);
+                        }
+                    }
+                }
+            }
+            
+            drawBall(gridX, gridY, color) {
+                const ctx = this.ctx;
+                const gridSize = this.r + this.hezag;
+                const x = this.xEltolas + gridX * gridSize + this.r / 2;
+                const y = this.yEltolas + gridY * gridSize + this.r / 2;
+                const radius = this.r / 2 - 2;
+                
+                // Draw 3D-ish ball
+                const gradient = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/4, x, y, radius);
+                gradient.addColorStop(0, this.lightenColor(this.colors[color], 60));
+                gradient.addColorStop(0.7, this.colors[color]);
+                gradient.addColorStop(1, this.darkenColor(this.colors[color], 40));
+                
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Highlight
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.beginPath();
+                ctx.arc(x - radius/4, y - radius/4, radius/3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            drawAllTalon() {
+                const gridSize = this.r + this.hezag;
+                
+                // Top
+                for (let i = 0; i < this.meret; i++) {
+                    this.drawTalonBall(this.xEltolas + i * gridSize + this.r / 2, 
+                                      this.yEltolas - gridSize + this.r / 2, 
+                                      this.talon[0][i]);
+                }
+                
+                // Bottom
+                for (let i = 0; i < this.meret; i++) {
+                    this.drawTalonBall(this.xEltolas + i * gridSize + this.r / 2, 
+                                      this.yEltolas + this.meret * gridSize + this.r / 2, 
+                                      this.talon[1][i]);
+                }
+                
+                // Left
+                for (let i = 0; i < this.meret; i++) {
+                    this.drawTalonBall(this.xEltolas - gridSize + this.r / 2, 
+                                      this.yEltolas + i * gridSize + this.r / 2, 
+                                      this.talon[2][i]);
+                }
+                
+                // Right
+                for (let i = 0; i < this.meret; i++) {
+                    this.drawTalonBall(this.xEltolas + this.meret * gridSize + this.r / 2, 
+                                      this.yEltolas + i * gridSize + this.r / 2, 
+                                      this.talon[3][i]);
+                }
+            }
+            
+            drawTalonBall(x, y, color) {
+                const ctx = this.ctx;
+                const radius = this.r / 2 - 2;
+                
+                const gradient = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/4, x, y, radius);
+                gradient.addColorStop(0, this.lightenColor(this.colors[color], 60));
+                gradient.addColorStop(0.7, this.colors[color]);
+                gradient.addColorStop(1, this.darkenColor(this.colors[color], 40));
+                
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            drawKurzor() {
+                const ctx = this.ctx;
+                const gridSize = this.r + this.hezag;
+                let x, y;
+                
+                if (this.kurzor === 0) {
+                    // Center - highlight the whole board
+                    ctx.strokeStyle = '#ffff00';
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(this.xEltolas - this.hezag/2 - 2, this.yEltolas - this.hezag/2 - 2, 
+                                 this.meret * gridSize + 4, this.meret * gridSize + 4);
+                    
+                    // Draw reshuffle indicator in center
+                    ctx.fillStyle = 'rgba(100, 100, 160, 0.3)';
+                    const centerX = this.xEltolas + this.meret * gridSize / 2 - this.hezag/2;
+                    const centerY = this.yEltolas + this.meret * gridSize / 2 - this.hezag/2;
+                    ctx.fillRect(centerX - gridSize*1.5, centerY - gridSize*1.5, gridSize*3, gridSize*3);
+                    ctx.fillStyle = '#000';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('shuffle', centerX, centerY);
+                    ctx.fillText('↑', centerX, centerY - gridSize*1);
+                    ctx.fillText('↓', centerX, centerY + gridSize*1);
+                    ctx.fillText('←', centerX - gridSize*1, centerY);
+                    ctx.fillText('→', centerX + gridSize*1, centerY);
+                    ctx.textAlign = 'left';
+                    return;
+                }
+                
+                switch(this.kurzor) {
+                    case 1: // Top
+                        x = this.xEltolas + this.kurzor2 * gridSize;
+                        y = this.yEltolas - gridSize;
+                        break;
+                    case 2: // Bottom
+                        x = this.xEltolas + this.kurzor2 * gridSize;
+                        y = this.yEltolas + this.meret * gridSize;
+                        break;
+                    case 3: // Left
+                        x = this.xEltolas - gridSize;
+                        y = this.yEltolas + this.kurzor2 * gridSize;
+                        break;
+                    case 4: // Right
+                        x = this.xEltolas + this.meret * gridSize;
+                        y = this.yEltolas + this.kurzor2 * gridSize;
+                        break;
+                }
+                
+                ctx.strokeStyle = '#ffff00';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(x - 2, y - 2, this.r + 4, this.r + 4);
+                
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(x - 3, y - 3, this.r + 6, this.r + 6);
+            }
+            
+            drawStatus() {
+                const ctx = this.ctx;
+                ctx.fillStyle = '#000';
+                ctx.font = '16px Arial';
+                
+                const text = `Balls: ${this.maxGolyo}  Level: ${this.palya}  Score: ${this.score}  Shuffles: ${this.scoreManager.getReshuffles()}`;
+                ctx.fillText(text, 10, 30);
+            }
+            
+            pushBall() {
+                if (this.animating) return;
+                if (this.kurzor === 0) return; // Can't push from center
+                
+                switch(this.kurzor) {
+                    case 1: this.golyoLe(); break;
+                    case 2: this.golyoFel(); break;
+                    case 3: this.golyoJobbra(); break;
+                    case 4: this.golyoBalra(); break;
+                }
+            }
+            
+            reshuffle() {
+                if (this.animating) return;
+                if (!this.scoreManager.useReshuffle()) {
+                    alert('No reshuffles left!');
+                    return;
+                }
+                
+                // Collect all balls
+                const balls = [];
+                for (let x = 0; x < this.meret; x++) {
+                    for (let y = 0; y < this.meret; y++) {
+                        if (this.tabla[x][y] !== 0) {
+                            balls.push(this.tabla[x][y]);
+                            this.tabla[x][y] = 0;
+                        }
+                    }
+                }
+                
+                // Redistribute randomly
+                for (const ball of balls) {
+                    let placed = false;
+                    while (!placed) {
+                        const x = Math.floor(Math.random() * this.meret);
+                        const y = Math.floor(Math.random() * this.meret);
+                        if (this.tabla[x][y] === 0) {
+                            this.tabla[x][y] = ball;
+                            placed = true;
+                        }
+                    }
+                }
+                
+                this.draw();
+            }
+            
+            golyoLe() {
+                const col = this.kurzor2;
+                if (this.tabla[col][0] !== 0) return;
+                
+                // Check if column has any balls
+                let hasContent = false;
+                for (let k = 0; k < this.meret; k++) {
+                    if (this.tabla[col][k] !== 0) hasContent = true;
+                }
+                if (!hasContent) return;
+                
+                const ball = this.talon[0][col];
+                this.talon[0][col] = this.veletlen(this.maxGolyo);
+                
+                this.animateBallPush(col, 0, 0, 1, ball);
+            }
+            
+            golyoFel() {
+                const col = this.kurzor2;
+                if (this.tabla[col][8] !== 0) return;
+                
+                let hasContent = false;
+                for (let k = 0; k < this.meret; k++) {
+                    if (this.tabla[col][k] !== 0) hasContent = true;
+                }
+                if (!hasContent) return;
+                
+                const ball = this.talon[1][col];
+                this.talon[1][col] = this.veletlen(this.maxGolyo);
+                
+                this.animateBallPush(col, 8, 0, -1, ball);
+            }
+            
+            golyoJobbra() {
+                const row = this.kurzor2;
+                if (this.tabla[0][row] !== 0) return;
+                
+                let hasContent = false;
+                for (let k = 0; k < this.meret; k++) {
+                    if (this.tabla[k][row] !== 0) hasContent = true;
+                }
+                if (!hasContent) return;
+                
+                const ball = this.talon[2][row];
+                this.talon[2][row] = this.veletlen(this.maxGolyo);
+                
+                this.animateBallPush(0, row, 1, 0, ball);
+            }
+            
+            golyoBalra() {
+                const row = this.kurzor2;
+                if (this.tabla[8][row] !== 0) return;
+                
+                let hasContent = false;
+                for (let k = 0; k < this.meret; k++) {
+                    if (this.tabla[k][row] !== 0) hasContent = true;
+                }
+                if (!hasContent) return;
+                
+                const ball = this.talon[3][row];
+                this.talon[3][row] = this.veletlen(this.maxGolyo);
+                
+                this.animateBallPush(8, row, -1, 0, ball);
+            }
+            
+            animateBallPush(x, y, dx, dy, ball) {
+                this.animating = true;
+                this.tabla[x][y] = ball;
+                
+                const animate = () => {
+                    const nextX = x + dx;
+                    const nextY = y + dy;
+                    
+                    if (nextX >= 0 && nextX < this.meret && nextY >= 0 && nextY < this.meret && 
+                        this.tabla[nextX][nextY] === 0) {
+                        this.tabla[x][y] = 0;
+                        x = nextX;
+                        y = nextY;
+                        this.tabla[x][y] = ball;
+                        this.draw();
+                        setTimeout(animate, 50);
+                    } else {
+                        this.animating = false;
+                        this.checkMatches(x, y, ball);
+                        this.draw();
+                    }
+                };
+                
+                this.draw();
+                setTimeout(animate, 50);
+            }
+            
+            checkMatches(x, y, color) {
+                // Mark connected same-colored balls
+                const marked = [];
+                this.findConnected(x, y, color, marked);
+                
+                if (marked.length >= 2) {
+                    // Remove marked balls
+                    for (const pos of marked) {
+                        this.tabla[pos.x][pos.y] = 0;
+                    }
+                    
+                    this.score += marked.length;
+                    
+                    // Check if board is clear
+                    let ballCount = 0;
+                    for (let i = 0; i < this.meret; i++) {
+                        for (let j = 0; j < this.meret; j++) {
+                            if (this.tabla[i][j] !== 0) ballCount++;
+                        }
+                    }
+                    
+                    if (ballCount === 0) {
+                        this.score += 100;
+                        this.levelComplete();
+                    }
+                }
+            }
+            
+            findConnected(x, y, color, marked) {
+                if (x < 0 || x >= this.meret || y < 0 || y >= this.meret) return;
+                if (this.tabla[x][y] !== color) return;
+                if (marked.some(p => p.x === x && p.y === y)) return;
+                
+                marked.push({x, y});
+                
+                this.findConnected(x + 1, y, color, marked);
+                this.findConnected(x - 1, y, color, marked);
+                this.findConnected(x, y + 1, color, marked);
+                this.findConnected(x, y - 1, color, marked);
+            }
+            
+            levelComplete() {
+                setTimeout(() => {
+                    this.playVictoryAnimation();
+                }, 100);
+            }
+            
+            playVictoryAnimation() {
+                this.animating = true;
+                this.pressedKeyOrMouse = false;
+                const ctx = this.ctx;
+                let frame = 0;
+                const maxFrames = 2000;
+                const isMultipleOf5 = this.palya % 5 === 0;
+                const isMultipleOf10 = this.palya % 10 === 0;
+                
+                const animate = () => {
+                    
+
+                    if (isMultipleOf10) {
+                        // Special pattern for every 10th level - spiral
+                        // no background clearing for this one
+                        this.drawSpiralPattern(ctx, frame, 300);
+                    } else if (isMultipleOf5) {
+                        // Special pattern for every 10th level - spiral
+                        // Clear background
+                        ctx.fillStyle = '#5fafff';
+                        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                        this.drawSpiralPattern(ctx, frame, 300);
+                    } else {
+                        // Random balls everywhere
+                        for (let i = 0; i < this.maxGolyo; i++) {
+                            const x = Math.random() * this.canvas.width;
+                            const y = Math.random() * this.canvas.height;
+                            const color = Math.floor(Math.random() * this.maxGolyo) + 1;
+                            const size = Math.random() * 30 + 10;
+                            
+                            const radius = size / 2;
+                            const gradient = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/4, x, y, radius);
+                            gradient.addColorStop(0, this.lightenColor(this.colors[color], 60));
+                            gradient.addColorStop(0.7, this.colors[color]);
+                            gradient.addColorStop(1, this.darkenColor(this.colors[color], 40));
+                            
+                            ctx.fillStyle = gradient;
+                            ctx.beginPath();
+                            ctx.arc(x, y, radius, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                    
+                    // Display level complete message
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+                    ctx.fillRect(this.canvas.width/2 - 150, this.canvas.height/2 - 50, 300, 100);
+                    ctx.fillStyle = '#ffff00';
+                    ctx.font = 'bold 30px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`Level ${this.palya} Complete!`, this.canvas.width/2, this.canvas.height/2);
+                    ctx.font = 'bold 20px Arial';
+                    ctx.fillText(`Score: ${this.score}`, this.canvas.width/2, this.canvas.height/2 + 30);
+                    ctx.textAlign = 'left';
+                    
+                    frame++;
+                    if (frame < maxFrames && !this.pressedKeyOrMouse) {
+                        //requestAnimationFrame(animate);
+                        setTimeout(animate, 10);
+                    } else {
+                        this.animating = false;
+                        this.advanceLevel();
+                    }
+                };
+                
+                animate();
+            }
+            
+            drawSpiralPattern(ctx, frame, maxFrames) {
+                const centerX = this.canvas.width / 2;
+                const centerY = this.canvas.height / 2;
+                const numBalls = 20;
+                
+                for (let i = 0; i < numBalls; i++) {
+                    const angle = (i / numBalls) * Math.PI * 4 + (frame / maxFrames) * Math.PI * 6;
+                    const radius = (frame / maxFrames) * 100;
+                    const spiralRadius = radius * (i / numBalls);
+                    
+                    const x = centerX + Math.cos(angle) * spiralRadius;
+                    const y = centerY + Math.sin(angle) * spiralRadius;
+                    
+                    const color = (i % this.maxGolyo) + 1;
+                    const size = 20 + Math.sin(frame / 10 + i) * 10;
+                    
+                    const ballRadius = size / 2;
+                    const gradient = ctx.createRadialGradient(x - ballRadius/3, y - ballRadius/3, ballRadius/4, x, y, ballRadius);
+                    gradient.addColorStop(0, this.lightenColor(this.colors[color], 60));
+                    gradient.addColorStop(0.7, this.colors[color]);
+                    gradient.addColorStop(1, this.darkenColor(this.colors[color], 40));
+                    
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            
+            advanceLevel() {
+                this.palya++;
+                if (this.palya >= 50) {
+                    this.maxGolyo++;
+                    if (this.maxGolyo > 8) this.maxGolyo = 8;
+                    this.palya = 1;
+                }
+                this.scoreManager.setLevel(this.palya);
+                this.initGame();
+                this.draw();
+            }
+            
+            resetLevel() {
+                this.initGame();
+                this.draw();
+            }
+            
+            newGame() {
+                this.score = 0;
+                this.palya = 1;
+                this.maxGolyo = 4;
+                this.scoreManager.setLevel(1);
+                this.initGame();
+                this.draw();
+            }
+            
+            lightenColor(color, percent) {
+                const num = parseInt(color.replace('#',''), 16);
+                const amt = Math.round(2.55 * percent);
+                const R = Math.min(255, (num >> 16) + amt);
+                const G = Math.min(255, (num >> 8 & 0x00FF) + amt);
+                const B = Math.min(255, (num & 0x0000FF) + amt);
+                return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
+            }
+            
+            darkenColor(color, percent) {
+                const num = parseInt(color.replace('#',''), 16);
+                const amt = Math.round(2.55 * percent);
+                const R = Math.max(0, (num >> 16) - amt);
+                const G = Math.max(0, (num >> 8 & 0x00FF) - amt);
+                const B = Math.max(0, (num & 0x0000FF) - amt);
+                return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
+            }
+        }
+        
+        // Start the game
+        let game;
+        window.addEventListener('load', () => {
+            game = new GlugluGame();
+        });
+    </script>
+</body>
+</html>
