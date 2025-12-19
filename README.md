@@ -29,3 +29,6 @@ There are many differences because Claude Code AI dropped most of the accessibil
 
 ## Additional notes
 Created the game after reading a book about Java programming in 2004 while I still visited Uni learning totally unrelated Civil Engineering stuff. Original code and the ported code also using sime English-Hungarian variable names, I'm leaving them as is.
+
+## Try it out
+https://bencepapa.github.io/Gluglu/
